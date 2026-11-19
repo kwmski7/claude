@@ -1,0 +1,797 @@
+<title>ASOS Wind &amp; Rain</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap">
+<style>
+/* Layout: one full-bleed map instrument; translucent panels float at the corners like a cockpit overlay.
+   Single dark look by choice (night-sky map, like a weather globe). */
+:root {
+  color-scheme: dark;
+  --bg: #0b0f15;          /* map surface, no data */
+  --bg-cover: #121a24;    /* map surface inside station coverage */
+  --panel: rgba(13, 18, 26, 0.82);
+  --panel-solid: #0f151e;
+  --line: rgba(160, 182, 210, 0.18);
+  --fg: #e6ecf3;
+  --fg-2: #a7b3c2;
+  --fg-3: #74808f;
+  --accent: #6da7ec;      /* precipitation ramp step 300 */
+  --focus: #cde2fb;
+  --font-ui: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r: 10px;
+  --gl: max(16px, env(safe-area-inset-left, 0px));
+  --gr: max(16px, env(safe-area-inset-right, 0px));
+  --gt: calc(env(safe-area-inset-top, 0px) + 16px);
+  --gb: calc(env(safe-area-inset-bottom, 0px) + 16px);
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; background: var(--bg); color: var(--fg); }
+body { font-family: var(--font-ui); font-size: 14px; line-height: 1.45; overflow: hidden; -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+#map { position: fixed; inset: 0; touch-action: none; cursor: grab; background: var(--bg); }
+#map.dragging { cursor: grabbing; }
+#map canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.panel {
+  position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+
+/* Title block */
+#head { top: var(--gt); left: var(--gl); padding: 12px 14px; max-width: min(360px, calc(100vw - 32px)); }
+.eyebrow { font-family: var(--font-data); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); }
+h1 { margin: 2px 0 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; text-wrap: balance; }
+#dateline { margin-top: 2px; font-family: var(--font-data); font-size: 12.5px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+
+/* Readout (hover / tap) */
+#readout { top: var(--gt); right: var(--gr); width: 260px; padding: 12px 14px; font-variant-numeric: tabular-nums; }
+#readout .k { color: var(--fg-3); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; font-family: var(--font-data); }
+#readout .coords { font-family: var(--font-data); font-size: 12px; color: var(--fg-2); }
+.rgrid { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin-top: 6px; font-size: 13px; }
+.rgrid dt { color: var(--fg-2); }
+.rgrid dd { margin: 0; text-align: right; font-family: var(--font-data); }
+.sep { height: 1px; background: var(--line); margin: 10px 0 8px; }
+.stn-name { font-weight: 600; }
+.stn-sub { color: var(--fg-3); font-family: var(--font-data); font-size: 12px; }
+.hint { color: var(--fg-3); font-size: 12.5px; }
+#readout .rclose { position: absolute; top: 6px; right: 6px; width: 28px; height: 28px; font-size: 16px; }
+
+/* Control panel */
+#ctrl { left: var(--gl); bottom: var(--gb); width: 340px; padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 12px; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.label { font-family: var(--font-data); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); }
+.chip {
+  border: 1px solid var(--line); background: transparent; border-radius: 7px; padding: 4px 8px; cursor: pointer;
+  font-family: var(--font-data); font-size: 12px; line-height: 1.25; text-align: center; color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+.chip small { display: block; font-size: 10px; color: var(--fg-3); letter-spacing: 0.04em; }
+.chip:hover { border-color: rgba(160, 182, 210, 0.4); color: var(--fg); }
+.chip[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.chip[aria-pressed="true"] small { color: var(--bg); opacity: 0.7; }
+.toggles .chip { padding: 5px 9px; }
+
+/* Legend */
+.legend { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-top: 6px; }
+.legend span { height: 10px; border-radius: 2px; }
+.legend span:first-child { border-radius: 4px 2px 2px 4px; }
+.legend span:last-child { border-radius: 2px 4px 4px 2px; }
+.ticks { display: grid; grid-template-columns: repeat(7, 1fr); margin-top: 3px; font-family: var(--font-data); font-size: 10.5px; color: var(--fg-2); }
+.ticks b { font-weight: 400; transform: translateX(-50%); justify-self: start; white-space: nowrap; }
+.ticks b:first-child { transform: none; }
+.wind-key { display: flex; align-items: center; gap: 8px; color: var(--fg-2); font-size: 12px; margin-top: 8px; }
+.wind-key svg { flex: none; }
+
+.summary { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.stat { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; background: transparent; text-align: left; cursor: pointer; min-width: 0; }
+.stat:hover { border-color: rgba(160, 182, 210, 0.4); }
+.stat .v { font-family: var(--font-data); font-size: 15px; font-variant-numeric: tabular-nums; }
+.stat .n { font-size: 11.5px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat .t { font-family: var(--font-data); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-3); }
+.links { display: flex; gap: 6px; flex-wrap: wrap; }
+.links .chip { font-family: var(--font-ui); font-size: 12.5px; }
+
+/* Zoom */
+#zoom { right: var(--gr); bottom: var(--gb); display: flex; flex-direction: column; padding: 4px; gap: 2px; }
+#zoom button { width: 34px; height: 34px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; font-family: var(--font-data); font-size: 17px; color: var(--fg-2); }
+#zoom button:hover { background: rgba(160, 182, 210, 0.12); color: var(--fg); }
+
+/* Drawer: station table + about */
+#drawer {
+  position: absolute; top: var(--gt); right: var(--gr); bottom: var(--gb); width: min(700px, calc(100vw - 32px));
+  display: flex; flex-direction: column; background: var(--panel-solid); z-index: 5;
+}
+.dhead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.dhead h2 { margin: 0; font-size: 15px; font-weight: 600; flex: 1; }
+.dbody { overflow: auto; padding: 0 0 12px; min-height: 0; }
+.close { border: 0; background: transparent; width: 32px; height: 32px; border-radius: 6px; cursor: pointer; font-size: 18px; color: var(--fg-2); }
+.close:hover { background: rgba(160, 182, 210, 0.12); }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+th, td { padding: 5px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid rgba(160, 182, 210, 0.08); }
+th:first-child, td:first-child { text-align: left; }
+th { position: sticky; top: 0; background: var(--panel-solid); color: var(--fg-2); font-weight: 500; font-size: 11.5px; cursor: pointer; user-select: none; }
+th[aria-sort] { color: var(--fg); }
+td { font-family: var(--font-data); }
+td:first-child { font-family: var(--font-ui); }
+td .id { color: var(--fg-3); font-family: var(--font-data); font-size: 11px; margin-left: 4px; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: rgba(160, 182, 210, 0.07); }
+.about { padding: 14px 16px; max-width: 64ch; color: var(--fg-2); }
+.about h3 { color: var(--fg); font-size: 13.5px; margin: 16px 0 4px; font-weight: 600; }
+.about h3:first-child { margin-top: 0; }
+.about p, .about ul { margin: 0 0 8px; }
+.about ul { padding-left: 18px; }
+.about code { font-family: var(--font-data); font-size: 12px; color: var(--fg); background: rgba(160, 182, 210, 0.1); padding: 1px 4px; border-radius: 4px; word-break: break-all; }
+.about a { color: var(--accent); }
+
+/* Empty state */
+#empty { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(440px, calc(100vw - 32px)); padding: 18px 20px; }
+#empty h2 { margin: 0 0 6px; font-size: 16px; }
+#empty p { margin: 0 0 8px; color: var(--fg-2); }
+#empty code { display: block; font-family: var(--font-data); font-size: 12px; background: rgba(160, 182, 210, 0.1); padding: 8px 10px; border-radius: 6px; color: var(--fg); overflow-x: auto; white-space: pre; }
+
+/* Phone: panels stack, controls dock to the bottom */
+@media (max-width: 720px) {
+  #head { padding: 9px 12px; right: var(--gr); max-width: none; }
+  h1 { font-size: 15.5px; }
+  #readout { left: var(--gl); width: auto; padding: 10px 12px; z-index: 2; }
+  #readout:not(.pinned) { display: none; }
+  #readout .rgrid { gap: 2px 12px; font-size: 12.5px; }
+  #readout .opt { display: none; }
+  #ctrl { left: var(--gl); right: var(--gr); width: auto; gap: 10px; padding: 10px 12px 12px; }
+  #dates { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: -2px; padding: 2px; }
+  #dates .chip { flex: none; padding: 3px 7px; }
+  .stat { padding: 5px 7px; }
+  .stat .v { font-size: 14px; }
+  .wind-key { margin-top: 6px; font-size: 11.5px; }
+  #zoom { display: none; }
+  #drawer { left: var(--gl); width: auto; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div id="map" aria-label="Map of wind flow and daily precipitation over South Korea" role="img">
+  <canvas id="base"></canvas>
+  <canvas id="flow"></canvas>
+  <canvas id="marks"></canvas>
+</div>
+
+<header id="head" class="panel">
+  <div class="eyebrow">KMA ASOS · daily observations</div>
+  <h1>Wind &amp; rain over Korea</h1>
+  <div id="dateline">Loading…</div>
+</header>
+
+<aside id="readout" class="panel" aria-live="polite">
+  <div class="hint">Hover or tap the map to read values. Drag to pan, scroll or pinch to zoom.</div>
+</aside>
+
+<section id="ctrl" class="panel" aria-label="Map controls">
+  <div>
+    <div class="label">Day (KST)</div>
+    <div class="row" id="dates" role="group" aria-label="Select day" style="margin-top:6px"></div>
+  </div>
+  <div class="summary" id="summary"></div>
+  <div>
+    <div class="label">Daily precipitation, mm</div>
+    <div class="legend" id="legend" aria-hidden="true"></div>
+    <div class="ticks" id="ticks"></div>
+    <div class="wind-key">
+      <svg width="46" height="12" viewBox="0 0 46 12" aria-hidden="true"><path d="M1 9 C 12 9, 20 3, 44 3" stroke="#e6ecf3" stroke-width="1.2" fill="none" stroke-linecap="round" opacity=".85"/><path d="M1 9 C 8 9, 12 7, 18 6" stroke="#e6ecf3" stroke-width="1.2" fill="none" stroke-linecap="round" opacity=".35"/></svg>
+      <span>Flow lines: daily mean wind. Faster, longer trails mean stronger wind.</span>
+    </div>
+  </div>
+  <div class="row toggles" role="group" aria-label="Layers">
+    <button class="chip" id="t-anim" aria-pressed="true">Animate</button>
+    <button class="chip" id="t-rain" aria-pressed="true">Rain</button>
+    <button class="chip" id="t-stn" aria-pressed="true">Stations</button>
+    <span style="flex:1"></span>
+    <div class="links">
+      <button class="chip" id="b-table">Station table</button>
+      <button class="chip" id="b-about">About</button>
+    </div>
+  </div>
+</section>
+
+<div id="zoom" class="panel" role="group" aria-label="Zoom">
+  <button id="z-in" aria-label="Zoom in">+</button>
+  <button id="z-out" aria-label="Zoom out">−</button>
+  <button id="z-reset" aria-label="Reset view" style="font-size:13px">⟲</button>
+</div>
+
+<section id="drawer" class="panel" hidden aria-modal="false">
+  <div class="dhead"><h2 id="d-title">Stations</h2><button class="close" id="d-close" aria-label="Close">×</button></div>
+  <div class="dbody" id="d-body"></div>
+</section>
+
+<section id="empty" class="panel" hidden>
+  <h2>No observations loaded</h2>
+  <p>The map needs <b>data/weather.js</b>, which the fetch script writes from the KMA ASOS daily API. The endpoint only accepts the key as a <code style="display:inline;padding:1px 4px">serviceKey</code> query parameter.</p>
+  <code>DATA_GO_KR_SERVICE_KEY=… python3 scripts/fetch_asos.py --days 7</code>
+</section>
+
+<script src="data/coast.js"></script>
+<script src="data/weather.js"></script>
+<script>
+"use strict";
+(() => {
+  // ---------- constants ----------
+  const RAIN_STEPS = [0.1, 1, 5, 10, 20, 50];                 // class lower bounds, mm
+  const RAIN_COLORS = ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"]; // validated ordinal ramp on --bg
+  const DARK_INK_FROM = 4;                                      // >=20 mm: draw flow lines dark for contrast
+  const GRID = { w: 122.6, e: 132.8, s: 31.6, n: 40.2, res: 0.05 };
+  const SPACING_KM = 35;                                        // mean ASOS spacing over South Korea (≈1000 km² per station)
+  const KAPPA0 = 5.052 * Math.pow((2 * SPACING_KM) / Math.PI, 2); // Barnes (1964) / Koch et al. (1983), km²
+  const GAMMA = 0.3;
+  const CONF_NEAR = 45, CONF_FAR = 115;                         // km: full -> no confidence by distance to nearest station
+  const HOME = { w: 124.4, e: 131.0, s: 33.0, n: 38.65 };
+  const COMPASS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const $ = (id) => document.getElementById(id);
+  const DATA = window.ASOS;
+  const COAST = window.COAST;
+
+  // ---------- helpers ----------
+  const D2R = Math.PI / 180;
+  const mercY = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * D2R) / 2));
+  const invMercY = (y) => (2 * Math.atan(Math.exp(y)) - Math.PI / 2) / D2R;
+  const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const RAIN_RGB = RAIN_COLORS.map(hexRgb);
+  const BG_RGB = hexRgb("#0b0f15"), COVER_RGB = hexRgb("#121a24");
+  const rainClass = (mm) => { let c = -1; for (let i = 0; i < RAIN_STEPS.length; i++) if (mm >= RAIN_STEPS[i]) c = i; return c; };
+  const compass = (deg) => COMPASS[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+  const fmt = (v, d = 1) => (v == null || Number.isNaN(v) ? "–" : v.toFixed(d));
+  const kmBetween = (lat1, lon1, lat2, lon2) => {
+    const dLat = (lat2 - lat1) * D2R, dLon = (lon2 - lon1) * D2R;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * D2R) * Math.cos(lat2 * D2R) * Math.sin(dLon / 2) ** 2;
+    return 12742 * Math.asin(Math.sqrt(a));
+  };
+  const dayLabel = (d) => {
+    const dt = new Date(Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8)));
+    return {
+      long: dt.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }),
+      md: dt.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }),
+      wd: dt.toLocaleDateString("en-GB", { weekday: "short", timeZone: "UTC" }),
+    };
+  };
+
+  // ---------- view (Web Mercator, scale in px per radian) ----------
+  const view = { cx: 127.7, cy: mercY(35.8), s: 1, W: 0, H: 0, dpr: 1, s0: 1, touched: false };
+  const project = (lon, lat) => [view.W / 2 + view.s * (lon - view.cx) * D2R, view.H / 2 - view.s * (mercY(lat) - view.cy)];
+  const unproject = (x, y) => [view.cx + (x - view.W / 2) / view.s / D2R, invMercY(view.cy - (y - view.H / 2) / view.s)];
+
+  function fitHome() {
+    const narrow = view.W <= 720;
+    const padT = narrow ? 80 : 40, padB = narrow ? (ctrlHeight() + 24) : 40, padX = narrow ? 12 : 40;
+    const spanX = (HOME.e - HOME.w) * D2R, spanY = mercY(HOME.n) - mercY(HOME.s);
+    const s = Math.min((view.W - 2 * padX) / spanX, (view.H - padT - padB) / spanY);
+    view.s = view.s0 = s;
+    view.cx = (HOME.w + HOME.e) / 2;
+    // centre the box inside the free area between the padding
+    const midY = (mercY(HOME.n) + mercY(HOME.s)) / 2;
+    view.cy = midY - ((padB - padT) / 2) / s;
+  }
+  function ctrlHeight() { return $("ctrl").getBoundingClientRect().height || 230; }
+
+  // ---------- field: two-pass Barnes analysis on a lon/lat grid ----------
+  const NX = Math.round((GRID.e - GRID.w) / GRID.res) + 1, NY = Math.round((GRID.n - GRID.s) / GRID.res) + 1;
+  const F = { u: new Float32Array(NX * NY), v: new Float32Array(NX * NY), rn: new Float32Array(NX * NY), conf: new Float32Array(NX * NY) };
+
+  function barnesPoints(px, py, sx, sy, vals, kappa, cutoff2) {
+    // px/py: query positions in km; sx/sy: station positions in km; vals: arrays per variable (NaN = missing)
+    const n = px.length, m = sx.length, nv = vals.length, out = vals.map(() => new Float32Array(n));
+    const num = new Float64Array(nv), den = new Float64Array(nv);
+    for (let i = 0; i < n; i++) {
+      num.fill(0); den.fill(0);
+      for (let k = 0; k < m; k++) {
+        const dx = px[i] - sx[k], dy = py[i] - sy[k], r2 = dx * dx + dy * dy;
+        if (r2 > cutoff2) continue;
+        const w = Math.exp(-r2 / kappa);
+        for (let j = 0; j < nv; j++) { const v = vals[j][k]; if (v === v) { num[j] += w * v; den[j] += w; } }
+      }
+      for (let j = 0; j < nv; j++) out[j][i] = den[j] > 1e-12 ? num[j] / den[j] : NaN;
+    }
+    return out;
+  }
+
+  function analyse(day) {
+    const rec = DATA.obs[day] || {};
+    const sts = DATA.stations.filter((s) => rec[s.id]);
+    const m = sts.length;
+    const latRef = 36 * D2R, kx = 111.32 * Math.cos(latRef), ky = 110.57;  // local km projection for distances
+    const sx = new Float64Array(m), sy = new Float64Array(m);
+    const U = new Float64Array(m), V = new Float64Array(m), R = new Float64Array(m);
+    sts.forEach((s, k) => {
+      const o = rec[s.id];
+      sx[k] = s.lon * kx; sy[k] = s.lat * ky;
+      if (o.ws != null && o.wd != null) {
+        const th = o.wd * D2R;                 // meteorological: direction wind blows FROM
+        U[k] = -o.ws * Math.sin(th); V[k] = -o.ws * Math.cos(th);
+      } else { U[k] = NaN; V[k] = NaN; }
+      R[k] = o.rn != null ? o.rn : NaN;
+    });
+    const vals = [U, V, R];
+    const cut0 = 9 * KAPPA0, k1 = GAMMA * KAPPA0, cut1 = 9 * k1;
+
+    // pass 1 at stations -> residuals
+    const est = barnesPoints(sx, sy, sx, sy, vals, KAPPA0, cut0);
+    const resid = vals.map((arr, j) => arr.map((v, k) => (v === v && est[j][k] === est[j][k] ? v - est[j][k] : NaN)));
+
+    // grid positions
+    const n = NX * NY, gx = new Float64Array(n), gy = new Float64Array(n);
+    for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+      const idx = j * NX + i; gx[idx] = (GRID.w + i * GRID.res) * kx; gy[idx] = (GRID.s + j * GRID.res) * ky;
+    }
+    const g1 = barnesPoints(gx, gy, sx, sy, vals, KAPPA0, cut0);
+    const g2 = barnesPoints(gx, gy, sx, sy, resid, k1, cut1);
+
+    for (let idx = 0; idx < n; idx++) {
+      const add = (j) => (g2[j][idx] === g2[j][idx] ? g2[j][idx] : 0);
+      const u = g1[0][idx], v = g1[1][idx], r = g1[2][idx];
+      F.u[idx] = u === u ? u + add(0) : 0;
+      F.v[idx] = v === v ? v + add(1) : 0;
+      F.rn[idx] = r === r ? Math.max(0, r + add(2)) : 0;
+      // confidence from distance to nearest reporting station
+      let dmin = 1e9;
+      for (let k = 0; k < m; k++) { const dx = gx[idx] - sx[k], dy = gy[idx] - sy[k], d = dx * dx + dy * dy; if (d < dmin) dmin = d; }
+      const d = Math.sqrt(dmin), t = Math.min(1, Math.max(0, (CONF_FAR - d) / (CONF_FAR - CONF_NEAR)));
+      F.conf[idx] = t * t * (3 - 2 * t);
+    }
+  }
+
+  function sample(lon, lat) {
+    const fx = (lon - GRID.w) / GRID.res, fy = (lat - GRID.s) / GRID.res;
+    if (fx < 0 || fy < 0 || fx >= NX - 1 || fy >= NY - 1) return null;
+    const i = fx | 0, j = fy | 0, tx = fx - i, ty = fy - j;
+    const a = j * NX + i, b = a + 1, c = a + NX, d = c + 1;
+    const w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty), w01 = (1 - tx) * ty, w11 = tx * ty;
+    const lerp = (A) => A[a] * w00 + A[b] * w10 + A[c] * w01 + A[d] * w11;
+    return { u: lerp(F.u), v: lerp(F.v), rn: lerp(F.rn), conf: lerp(F.conf) };
+  }
+
+  // ---------- canvases ----------
+  const cBase = $("base"), cFlow = $("flow"), cMarks = $("marks");
+  const xBase = cBase.getContext("2d"), xFlow = cFlow.getContext("2d"), xMarks = cMarks.getContext("2d");
+  const layers = { anim: !reduceMotion, rain: true, stn: true };
+
+  function resize() {
+    const r = $("map").getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const oldW = view.W, oldH = view.H;
+    view.W = r.width; view.H = r.height; view.dpr = dpr;
+    for (const c of [cBase, cFlow, cMarks]) { c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr); }
+    if (!view.touched || !oldW) fitHome();
+    drawBase(2); drawMarks(); resetParticles();
+  }
+
+  // --- base: coverage tint + stepped precipitation (coastlines live on the marks layer)
+  let fineTimer = 0;
+  function drawBase(step) {
+    const W = cBase.width, H = cBase.height, dpr = view.dpr;
+    const sw = Math.ceil(W / (step * dpr)), sh = Math.ceil(H / (step * dpr));
+    const img = new ImageData(sw, sh), px = img.data;
+    const hasData = !!DATA;
+    for (let y = 0; y < sh; y++) {
+      const lat = unproject(0, (y + 0.5) * step)[1];
+      for (let x = 0; x < sw; x++) {
+        const lon = view.cx + ((x + 0.5) * step - view.W / 2) / view.s / D2R;
+        const s = hasData ? sample(lon, lat) : null;
+        let r = BG_RGB[0], g = BG_RGB[1], b = BG_RGB[2];
+        if (s && s.conf > 0) {
+          const c = s.conf;
+          r += (COVER_RGB[0] - r) * c; g += (COVER_RGB[1] - g) * c; b += (COVER_RGB[2] - b) * c;
+          if (layers.rain) {
+            const k = rainClass(s.rn);
+            if (k >= 0) { const col = RAIN_RGB[k]; r += (col[0] - r) * c; g += (col[1] - g) * c; b += (col[2] - b) * c; }
+          }
+        }
+        const o = (y * sw + x) * 4; px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
+      }
+    }
+    // draw the low-res raster scaled up (smoothing softens class edges slightly)
+    const tmp = drawBase.tmp || (drawBase.tmp = document.createElement("canvas"));
+    tmp.width = sw; tmp.height = sh; tmp.getContext("2d").putImageData(img, 0, 0);
+    xBase.setTransform(1, 0, 0, 1, 0, 0);
+    xBase.imageSmoothingEnabled = true; xBase.imageSmoothingQuality = "high";
+    xBase.drawImage(tmp, 0, 0, sw * step * dpr, sh * step * dpr);
+    xBase.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (step > 2) { clearTimeout(fineTimer); fineTimer = setTimeout(() => drawBase(2), 140); }
+  }
+
+  function strokeLines(ctx, lines) {
+    if (!COAST) return;
+    const q = COAST.q;
+    ctx.beginPath();
+    for (const l of lines) {
+      let x = 0, y = 0;
+      for (let i = 0; i < l.length; i += 2) {
+        x += l[i]; y += l[i + 1];
+        const [px, py] = project(x / q, y / q);
+        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      }
+    }
+    ctx.stroke();
+  }
+  function drawCoast(ctx) {
+    if (!COAST) return;
+    ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(6, 10, 16, 0.55)"; ctx.lineWidth = 2.4;
+    strokeLines(ctx, COAST.coast);
+    ctx.strokeStyle = "rgba(220, 232, 246, 0.8)"; ctx.lineWidth = 0.9;
+    strokeLines(ctx, COAST.coast);
+    ctx.strokeStyle = "rgba(220, 232, 246, 0.5)"; ctx.setLineDash([4, 3]);
+    strokeLines(ctx, COAST.border);
+    ctx.setLineDash([]);
+  }
+
+  // --- marks: coastlines, stations, pinned point
+  let pin = null; // {lon, lat}
+  function drawMarks() {
+    const ctx = xMarks, dpr = view.dpr;
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cMarks.width, cMarks.height); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawCoast(ctx);
+    if (DATA && layers.stn) {
+      const rec = DATA.obs[state.day] || {};
+      const r = view.s / view.s0 > 2.2 ? 3.2 : 2.4;
+      for (const s of DATA.stations) {
+        if (!rec[s.id]) continue;
+        const [x, y] = project(s.lon, s.lat);
+        if (x < -10 || y < -10 || x > view.W + 10 || y > view.H + 10) continue;
+        ctx.beginPath(); ctx.arc(x, y, r + 1.2, 0, 7); ctx.fillStyle = "#0b0f15"; ctx.fill();
+        ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fillStyle = "#f2c66d"; ctx.fill();
+      }
+      if (view.s / view.s0 > 2.2) {           // labels once zoomed in
+        ctx.font = "500 11px " + getComputedStyle(document.body).getPropertyValue("--font-ui");
+        ctx.textBaseline = "middle"; ctx.lineWidth = 3; ctx.strokeStyle = "rgba(11,15,21,0.85)"; ctx.fillStyle = "#e6ecf3";
+        for (const s of DATA.stations) {
+          const o = rec[s.id]; if (!o) continue;
+          const [x, y] = project(s.lon, s.lat);
+          if (x < 0 || y < 0 || x > view.W || y > view.H) continue;
+          const t = `${s.ko} ${fmt(o.rn)}`;
+          ctx.strokeText(t, x + 6, y); ctx.fillText(t, x + 6, y);
+        }
+      }
+    }
+    if (pin) {
+      const [x, y] = project(pin.lon, pin.lat);
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, 7, 0, 7); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x - 11, y); ctx.lineTo(x - 4, y); ctx.moveTo(x + 4, y); ctx.lineTo(x + 11, y);
+      ctx.moveTo(x, y - 11); ctx.lineTo(x, y - 4); ctx.moveTo(x, y + 4); ctx.lineTo(x, y + 11); ctx.stroke();
+    }
+  }
+
+  // ---------- particles ----------
+  let parts = [];
+  const MAX_AGE = 90;
+  function particleCount() { return Math.round(Math.min(4200, Math.max(900, (view.W * view.H) / 420))); }
+  function spawn(p) {
+    for (let t = 0; t < 12; t++) {
+      const x = Math.random() * view.W, y = Math.random() * view.H;
+      const [lon, lat] = unproject(x, y), s = sample(lon, lat);
+      if (s && s.conf > 0.12 && Math.random() < s.conf) { p.x = x; p.y = y; p.age = (Math.random() * MAX_AGE) | 0; return p; }
+    }
+    p.x = -1; p.y = -1; p.age = MAX_AGE; return p;
+  }
+  function resetParticles() {
+    xFlow.setTransform(1, 0, 0, 1, 0, 0); xFlow.clearRect(0, 0, cFlow.width, cFlow.height);
+    if (!DATA) { parts = []; return; }
+    parts = Array.from({ length: particleCount() }, () => spawn({}));
+    if (!layers.anim) stillFrame();
+  }
+  // buckets: [ink(0 light,1 dark)][alpha 0..3]
+  const BUCKETS = 4;
+  const INK = [[235, 242, 255], [8, 14, 24]];
+  function step(fade = 0.9) {
+    const ctx = xFlow, dpr = view.dpr;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.fillStyle = `rgba(0,0,0,${fade})`; ctx.fillRect(0, 0, cFlow.width, cFlow.height);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const k = 0.24 * Math.sqrt(view.s / view.s0);   // px per frame per m/s
+    const paths = [[], []].map(() => Array.from({ length: BUCKETS }, () => []));
+    for (const p of parts) {
+      if (p.age++ >= MAX_AGE) { spawn(p); p.age = 0; continue; }
+      const [lon, lat] = unproject(p.x, p.y), s = sample(lon, lat);
+      if (!s || s.conf < 0.06) { spawn(p); p.age = 0; continue; }
+      const nx = p.x + s.u * k, ny = p.y - s.v * k;   // Mercator is conformal: screen direction = compass direction
+      const ink = layers.rain && rainClass(s.rn) >= DARK_INK_FROM ? 1 : 0;
+      const a = Math.min(BUCKETS - 1, Math.floor(s.conf * BUCKETS));
+      paths[ink][a].push(p.x, p.y, nx, ny);
+      p.x = nx; p.y = ny;
+      if (nx < 0 || ny < 0 || nx > view.W || ny > view.H) { spawn(p); p.age = 0; }
+    }
+    ctx.lineWidth = 1; ctx.lineCap = "round";
+    for (let ink = 0; ink < 2; ink++) for (let a = 0; a < BUCKETS; a++) {
+      const seg = paths[ink][a]; if (!seg.length) continue;
+      const [r, g, b] = INK[ink];
+      ctx.strokeStyle = `rgba(${r},${g},${b},${(0.25 + 0.65 * (a + 1) / BUCKETS).toFixed(2)})`;
+      ctx.beginPath();
+      for (let i = 0; i < seg.length; i += 4) { ctx.moveTo(seg[i], seg[i + 1]); ctx.lineTo(seg[i + 2], seg[i + 3]); }
+      ctx.stroke();
+    }
+  }
+  function stillFrame() { for (let i = 0; i < 40; i++) step(0.94); }
+  let raf = 0;
+  function loop() { if (layers.anim && !document.hidden) step(); raf = requestAnimationFrame(loop); }
+
+  // ---------- state & UI ----------
+  const state = { day: null, sortKey: "id", sortDir: 1 };
+
+  function stationRows(day) {
+    const rec = DATA.obs[day] || {};
+    return DATA.stations.filter((s) => rec[s.id]).map((s) => ({ s, o: rec[s.id] }));
+  }
+
+  function setDay(day) {
+    state.day = day;
+    for (const b of $("dates").children) {
+      const on = b.dataset.day === day; b.setAttribute("aria-pressed", String(on));
+      if (on) { const row = $("dates"), r = b.offsetLeft + b.offsetWidth - row.clientWidth; if (row.scrollLeft < r || row.scrollLeft > b.offsetLeft) row.scrollLeft = Math.max(0, r); }
+    }
+    const rows = stationRows(day);
+    $("dateline").textContent = `${dayLabel(day).long} · ${rows.length} stations`;
+    analyse(day);
+    renderSummary(rows);
+    drawBase(2); drawMarks(); resetParticles();
+    if (pin) showReadout(pin.lon, pin.lat, true);
+    if (!$("drawer").hidden && $("d-title").dataset.kind === "table") renderTable();
+  }
+
+  function renderSummary(rows) {
+    const wet = rows.filter((r) => r.o.rn != null).sort((a, b) => b.o.rn - a.o.rn)[0];
+    const windy = rows.filter((r) => r.o.ws != null).sort((a, b) => b.o.ws - a.o.ws)[0];
+    const rainy = rows.filter((r) => (r.o.rn || 0) >= 0.1).length;
+    const el = $("summary"); el.innerHTML = "";
+    const add = (t, v, n, s) => {
+      const b = document.createElement("button"); b.className = "stat"; b.type = "button";
+      b.innerHTML = `<div class="t">${t}</div><div class="v">${v}</div><div class="n">${n}</div>`;
+      if (s) b.addEventListener("click", () => { pin = { lon: s.lon, lat: s.lat }; showReadout(s.lon, s.lat, true); drawMarks(); });
+      else b.style.cursor = "default";
+      el.appendChild(b);
+    };
+    add("Wettest", wet ? `${fmt(wet.o.rn)}<small style="font-size:11px"> mm</small>` : "–", wet ? `${wet.s.ko} ${wet.s.en}` : "", wet && wet.s);
+    add("Windiest", windy ? `${fmt(windy.o.ws)}<small style="font-size:11px"> m/s</small>` : "–", windy ? `${windy.s.ko} ${windy.s.en}` : "", windy && windy.s);
+    add("Rain ≥0.1", `${rainy}<small style="font-size:11px"> / ${rows.length}</small>`, "stations", null);
+  }
+
+  function nearestStation(lon, lat) {
+    const rec = DATA.obs[state.day] || {};
+    let best = null, bd = 1e9;
+    for (const s of DATA.stations) { if (!rec[s.id]) continue; const d = kmBetween(lat, lon, s.lat, s.lon); if (d < bd) { bd = d; best = s; } }
+    return best ? { s: best, o: rec[best.id], d: bd } : null;
+  }
+
+  function showReadout(lon, lat, pinned) {
+    const el = $("readout");
+    if (!DATA) return;
+    const f = sample(lon, lat), ns = nearestStation(lon, lat);
+    const ll = `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lon).toFixed(2)}°E`;
+    el.classList.toggle("pinned", !!pinned);
+    let html = (pinned ? `<button class="close rclose" id="r-close" aria-label="Unpin point">×</button>` : "") +
+      `<div class="k">${pinned ? "Pinned point" : "Cursor"}</div><div class="coords">${ll}</div>`;
+    if (f && f.conf > 0.02) {
+      const spd = Math.hypot(f.u, f.v), from = (Math.atan2(-f.u, -f.v) / D2R + 360) % 360;
+      html += `<dl class="rgrid">
+        <dt>Wind (interp.)</dt><dd>${fmt(spd)} m/s ${spd > 0.2 ? compass(from) : "calm"}</dd>
+        <dt>Rain (interp.)</dt><dd>${fmt(f.rn)} mm</dd>
+        <dt class="opt">Confidence</dt><dd class="opt">${f.conf > 0.8 ? "high" : f.conf > 0.4 ? "medium" : "low"}</dd>
+      </dl>`;
+    } else {
+      html += `<p class="hint" style="margin:6px 0 0">Too far from any ASOS station to interpolate.</p>`;
+    }
+    if (ns && ns.d < 160) {
+      const o = ns.o;
+      html += `<div class="sep"></div>
+        <div class="k">Nearest station · ${fmt(ns.d, 0)} km</div>
+        <div><span class="stn-name">${ns.s.ko}</span> ${ns.s.en} <span class="stn-sub">#${ns.s.id}</span></div>
+        <dl class="rgrid">
+          <dt>Rain</dt><dd>${fmt(o.rn)} mm</dd>
+          <dt>Mean wind</dt><dd>${fmt(o.ws)} m/s ${o.wd != null && o.ws > 0 ? compass(o.wd) : ""}</dd>
+          <dt class="opt">Max / gust</dt><dd class="opt">${fmt(o.wsMax)} / ${fmt(o.gust)} m/s</dd>
+          <dt>Temp</dt><dd>${fmt(o.tmin)} … ${fmt(o.tmax)} °C</dd>
+          ${o.rh != null ? `<dt class="opt">Humidity</dt><dd class="opt">${fmt(o.rh, 0)} %</dd>` : ""}
+          ${o.snow != null ? `<dt>Snow depth</dt><dd>${fmt(o.snow)} cm</dd>` : ""}
+        </dl>`;
+    }
+    el.innerHTML = html;
+    const rc = $("r-close"); if (rc) rc.onclick = unpin;
+  }
+  function unpin() {
+    pin = null; drawMarks();
+    const el = $("readout"); el.classList.remove("pinned");
+    el.innerHTML = `<div class="hint">Hover or tap the map to read values. Drag to pan, scroll or pinch to zoom.</div>`;
+  }
+
+  // ---------- drawer: table / about ----------
+  const COLS = [
+    { k: "id", t: "Station", v: (r) => r.s.id },
+    { k: "rn", t: "Rain mm", v: (r) => r.o.rn, d: 1 },
+    { k: "rn1h", t: "Max 1h mm", v: (r) => r.o.rn1h, d: 1 },
+    { k: "ws", t: "Wind m/s", v: (r) => r.o.ws, d: 1 },
+    { k: "wd", t: "Dir", v: (r) => r.o.wd },
+    { k: "gust", t: "Gust m/s", v: (r) => r.o.gust, d: 1 },
+    { k: "ta", t: "Mean °C", v: (r) => r.o.ta, d: 1 },
+    { k: "tmin", t: "Min °C", v: (r) => r.o.tmin, d: 1 },
+    { k: "tmax", t: "Max °C", v: (r) => r.o.tmax, d: 1 },
+    { k: "rh", t: "RH %", v: (r) => r.o.rh, d: 0 },
+  ];
+  function renderTable() {
+    const rows = stationRows(state.day);
+    const col = COLS.find((c) => c.k === state.sortKey) || COLS[0];
+    rows.sort((a, b) => {
+      const va = col.v(a), vb = col.v(b);
+      if (va == null && vb == null) return 0; if (va == null) return 1; if (vb == null) return -1;
+      return (va - vb) * state.sortDir;
+    });
+    const head = COLS.map((c) => `<th data-k="${c.k}" ${c.k === state.sortKey ? `aria-sort="${state.sortDir > 0 ? "ascending" : "descending"}"` : ""} tabindex="0">${c.t}${c.k === state.sortKey ? (state.sortDir > 0 ? " ↑" : " ↓") : ""}</th>`).join("");
+    const body = rows.map((r) => `<tr data-id="${r.s.id}">` + COLS.map((c) => {
+      if (c.k === "id") return `<td>${r.s.ko} <span style="color:var(--fg-2)">${r.s.en}</span><span class="id">${r.s.id}</span></td>`;
+      const v = c.v(r);
+      if (c.k === "wd") return `<td>${v == null || !r.o.ws ? "–" : `${compass(v)} <span style="color:var(--fg-3)">${v}°</span>`}</td>`;
+      return `<td>${fmt(v, c.d)}</td>`;
+    }).join("") + "</tr>").join("");
+    $("d-body").innerHTML = `<div style="overflow-x:auto"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+    $("d-body").querySelectorAll("th").forEach((th) => {
+      const go = () => { const k = th.dataset.k; state.sortDir = state.sortKey === k ? -state.sortDir : (k === "id" ? 1 : -1); state.sortKey = k; renderTable(); };
+      th.addEventListener("click", go); th.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+    });
+    $("d-body").querySelectorAll("tbody tr").forEach((tr) => tr.addEventListener("click", () => {
+      const s = DATA.stations.find((x) => x.id === +tr.dataset.id);
+      pin = { lon: s.lon, lat: s.lat }; showReadout(s.lon, s.lat, true); drawMarks();
+      if (view.W <= 720) closeDrawer();
+    }));
+  }
+  function renderAbout() {
+    const gen = DATA ? DATA.generated : "–";
+    $("d-body").innerHTML = `<div class="about">
+      <h3>Source</h3>
+      <p>Korea Meteorological Administration (KMA) ASOS daily observations (종관기상관측 일자료), fetched from
+      <code>apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList</code>. Fetched ${gen} KST.</p>
+      <h3>What is drawn</h3>
+      <ul>
+        <li><b>Shading</b>: daily precipitation total (<code>sumRn</code>), stepped at 0.1, 1, 5, 10, 20 and 50 mm.</li>
+        <li><b>Flow lines</b>: daily mean wind speed (<code>avgWs</code>) blowing from the most frequent direction of the day (<code>maxWd</code>, 16 points).</li>
+        <li><b>Dots</b>: reporting ASOS stations. Tap one for its observed values.</li>
+      </ul>
+      <h3>Method</h3>
+      <p>Station values are spread onto a 0.05° grid with a two-pass Barnes analysis (Koch, DesJardins &amp; Kocin 1983):
+      κ₀ = ${KAPPA0.toFixed(0)} km² from a ${SPACING_KM} km mean station spacing, γ = ${GAMMA}. Wind is analysed as u/v components,
+      so speeds can drop where neighbouring stations disagree on direction. The field fades out between ${CONF_NEAR} and ${CONF_FAR} km from the nearest station.</p>
+      <h3>Limits</h3>
+      <ul>
+        <li>This is a <b>daily</b> product. The newest day is yesterday (KST); the API does not serve today.</li>
+        <li>The API has no daily vector-mean wind. Mean speed plus the modal direction overstates flow on days when the wind turned (front passages, sea breezes).</li>
+        <li>ASOS covers South Korea and its islands only. Values over open sea and north of the DMZ are extrapolated and shown faded.</li>
+        <li>Daily rainfall is patchy, especially convective rain; a 35 km station spacing smooths out local peaks. Check the station table for observed values.</li>
+        <li>Station coordinates are rounded to about 10 m and used only for placement.</li>
+      </ul>
+    </div>`;
+  }
+  function openDrawer(kind) {
+    $("drawer").hidden = false; $("d-title").dataset.kind = kind;
+    $("d-title").textContent = kind === "table" ? `Stations · ${dayLabel(state.day).long}` : "About this map";
+    kind === "table" ? renderTable() : renderAbout();
+    $("d-close").focus();
+  }
+  function closeDrawer() { $("drawer").hidden = true; }
+
+  // ---------- interaction: pan, zoom, hover, tap ----------
+  const mapEl = $("map");
+  const pointers = new Map();
+  let drag = null, pinchDist = 0, moved = false;
+  function viewChanged() { view.touched = true; drawBase(4); drawMarks(); resetParticles(); }
+  function zoomAt(f, x, y) {
+    const [lon, lat] = unproject(x, y);
+    view.s = Math.min(view.s0 * 12, Math.max(view.s0 * 0.6, view.s * f));
+    // keep (lon, lat) under the cursor
+    view.cx = lon - (x - view.W / 2) / view.s / D2R;
+    view.cy = mercY(lat) + (y - view.H / 2) / view.s;
+    viewChanged();
+  }
+  mapEl.addEventListener("pointerdown", (e) => {
+    mapEl.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+    if (pointers.size === 1) { drag = { x: e.offsetX, y: e.offsetY, cx: view.cx, cy: view.cy }; moved = false; }
+    if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinchDist = Math.hypot(a.x - b.x, a.y - b.y); }
+  });
+  mapEl.addEventListener("pointermove", (e) => {
+    if (!pointers.has(e.pointerId)) { if (e.pointerType === "mouse" && !pin && DATA) { const [lon, lat] = unproject(e.offsetX, e.offsetY); showReadout(lon, lat, false); } return; }
+    pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchDist > 0) zoomAt(d / pinchDist, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      pinchDist = d; moved = true; return;
+    }
+    if (drag) {
+      const dx = e.offsetX - drag.x, dy = e.offsetY - drag.y;
+      if (!moved && Math.hypot(dx, dy) < 4) return;
+      moved = true; mapEl.classList.add("dragging");
+      view.cx = drag.cx - dx / view.s / D2R; view.cy = drag.cy + dy / view.s;
+      viewChanged();
+    }
+  });
+  const endPointer = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchDist = 0;
+    if (pointers.size === 0) {
+      mapEl.classList.remove("dragging");
+      if (!moved && DATA && e.type === "pointerup") {
+        const [lon, lat] = unproject(e.offsetX, e.offsetY);
+        // tapping the pinned point again unpins it
+        if (pin) { const [px, py] = project(pin.lon, pin.lat); if (Math.hypot(px - e.offsetX, py - e.offsetY) < 10) { unpin(); return; } }
+        // snap to a station when close
+        let snap = null;
+        if (layers.stn) for (const s of DATA.stations) { const [x, y] = project(s.lon, s.lat); if (Math.hypot(x - e.offsetX, y - e.offsetY) < 10) snap = s; }
+        pin = snap ? { lon: snap.lon, lat: snap.lat } : { lon, lat };
+        showReadout(pin.lon, pin.lat, true); drawMarks();
+      }
+      drag = null;
+    }
+  };
+  mapEl.addEventListener("pointerup", endPointer);
+  mapEl.addEventListener("pointercancel", endPointer);
+  mapEl.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * 0.0015), e.offsetX, e.offsetY); }, { passive: false });
+  mapEl.addEventListener("dblclick", (e) => zoomAt(1.8, e.offsetX, e.offsetY));
+  $("z-in").onclick = () => zoomAt(1.5, view.W / 2, view.H / 2);
+  $("z-out").onclick = () => zoomAt(1 / 1.5, view.W / 2, view.H / 2);
+  $("z-reset").onclick = () => { view.touched = false; fitHome(); drawBase(2); drawMarks(); resetParticles(); };
+
+  const toggle = (id, key, after) => $(id).addEventListener("click", () => {
+    layers[key] = !layers[key]; $(id).setAttribute("aria-pressed", String(layers[key])); after();
+  });
+  toggle("t-anim", "anim", () => { if (!layers.anim) stillFrame(); });
+  toggle("t-rain", "rain", () => { drawBase(2); });
+  toggle("t-stn", "stn", drawMarks);
+  $("b-table").onclick = () => openDrawer("table");
+  $("b-about").onclick = () => openDrawer("about");
+  $("d-close").onclick = closeDrawer;
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { if (!$("drawer").hidden) closeDrawer(); else if (pin) unpin(); }
+    if (e.target.closest && e.target.closest("button, th, input")) return;
+    if (e.key === "+" || e.key === "=") zoomAt(1.4, view.W / 2, view.H / 2);
+    if (e.key === "-") zoomAt(1 / 1.4, view.W / 2, view.H / 2);
+  });
+
+  // ---------- legend ----------
+  (function legend() {
+    const lg = $("legend"), tk = $("ticks");
+    lg.innerHTML = `<span style="background:var(--bg-cover);outline:1px solid var(--line);outline-offset:-1px"></span>` +
+      RAIN_COLORS.map((c) => `<span style="background:${c}"></span>`).join("");
+    tk.innerHTML = `<b>0</b>` + RAIN_STEPS.map((v) => `<b>${v}</b>`).join("");
+  })();
+
+  // ---------- boot ----------
+  if (!DATA || !DATA.dates || !DATA.dates.length) {
+    $("empty").hidden = false;
+    $("dateline").textContent = "No data loaded";
+    $("ctrl").hidden = true; $("readout").hidden = true;
+    resize();
+    addEventListener("resize", resize);
+    return;
+  }
+  const dates = $("dates");
+  for (const d of DATA.dates) {
+    const b = document.createElement("button"); const L = dayLabel(d);
+    b.className = "chip"; b.dataset.day = d; b.setAttribute("aria-pressed", "false");
+    b.innerHTML = `<small>${L.wd}</small>${L.md}`;
+    b.addEventListener("click", () => setDay(d));
+    dates.appendChild(b);
+  }
+  if (reduceMotion) $("t-anim").setAttribute("aria-pressed", "false");
+  state.day = DATA.dates[DATA.dates.length - 1];
+  analyse(state.day);
+  resize();
+  setDay(state.day);
+  addEventListener("resize", resize);
+  let lastCtrlH = ctrlHeight();
+  new ResizeObserver(() => { const h = ctrlHeight(); if (Math.abs(h - lastCtrlH) > 4) { lastCtrlH = h; resize(); } }).observe($("ctrl"));
+  raf = requestAnimationFrame(loop);
+})();
+</script>

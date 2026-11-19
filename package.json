@@ -1,0 +1,13 @@
+{
+  "name": "korea-asos-flow",
+  "private": true,
+  "description": "Daily ASOS wind-flow and precipitation map of South Korea",
+  "scripts": {
+    "coast": "node scripts/build_coast.mjs",
+    "serve": "python3 -m http.server 8000 --directory web"
+  },
+  "devDependencies": {
+    "topojson-client": "3.1.0",
+    "world-atlas": "2.0.2"
+  }
+}
